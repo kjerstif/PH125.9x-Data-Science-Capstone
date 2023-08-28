@@ -1,0 +1,557 @@
+---
+title: "Data Analysis and Prediction of Questioner Segments"
+author: "Kjersti Framnes"
+date: "2023-08-24"
+output: pdf_document
+---
+
+# Introduction
+
+This dataset consists of respondents' answers to a series of questions, along with their demographic details such as age, gender, and county. The variables of interest for our analysis, columns `E` through `P`, represent responses to various questions and are primarily categorical in nature. 
+
+The primary goal of this project is to predict the `Segment` column, which categorizes respondents based on their responses. The secondary goal is to see if any of these models can exceed a precision of 70%. This because my company needs to see if they can achive the same segments based on 11 questions. They already have a model that requires 30 questions and there is a high cost to ask this many background questions when interviewing  
+
+To achieve this, we will:
+
+1. Conduct thorough data exploration to understand the distribution and relationships among variables.
+
+2. Use machine learning models, specifically Random Forest, k-Nearest Neighbors (kNN), and Naive Bayes, to predict the `Segment` column.
+
+3. Evaluate the performance of each model to determine its effectiveness and see if they exceed 70%.
+
+With this understanding, we will proceed to the methods and analysis section.
+
+First we need to make sure we have all the required packages, libraries and to read the data. The data is located on my Github account. 
+
+```{r setup, include=TRUE,results='hide',message=FALSE}
+
+
+
+if(!require(readxl)) install.packages("readxl", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(kknn)) install.packages("kknn", repos = "http://cran.us.r-project.org")
+if(!require(e1071)) install.packages("e1071", repos = "http://cran.us.r-project.org")
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(formatR)) install.packages("formatR", repos = "http://cran.us.r-project.org")
+if(!require(RColorBrewer)) install.packages("RColorBrewer", repos = "http://cran.us.r-project.org")
+if(!require(tidyr)) install.packages("tidyr", repos = "http://cran.us.r-project.org")
+if(!require(gt)) install.packages("gt", repos = "http://cran.us.r-project.org")
+
+# Load required libraries
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(kknn)
+library(e1071)
+library(tidyverse)
+library(formatR)
+library(RColorBrewer)
+library(tidyr)
+library(gt)
+
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE,size="tiny", tidy = TRUE,message=FALSE)
+
+
+# Required Libraries
+library(readxl)
+
+# Download Excel file from GitHub to a temporary local path
+url <- "https://raw.githubusercontent.com/kjerstif/PH125.9x-Data-Science-Capstone/main/Capstone_data.xlsx"
+local_path <- tempfile(fileext = ".xlsx")
+download.file(url, local_path, mode = "wb")
+
+# Read the downloaded Excel file
+data <- read_excel(local_path)
+
+
+
+
+```
+
+
+# Analysis
+
+## Data Cleaning
+
+Before diving into the analysis, it's essential to ensure that the dataset is clean. This step involves checking for missing values, handling categorical variables, and splitting the data into training and testing sets for modeling.
+
+```{r data-cleaning,include=TRUE}
+
+# Display the first few rows
+head(data)
+
+# Summary of data
+summary(data)
+
+# how many respondents
+length(unique(data$RespondentID))
+
+
+#see unique responses for one q
+unique(data$`Q9c_1 A high tax level is necessary to maintain important public services`)
+
+
+# Convert Segment to factor and inspect it
+data$Segment <- as.factor(data$Segment)
+table(data$Segment)
+
+
+#splitting the data
+set.seed(123)
+splitIndex <- createDataPartition(data$Segment, p = 0.8, list = TRUE, times = 1)
+train_data <- data[splitIndex$Resample1, ]
+test_data <- data[-splitIndex$Resample1, ]
+
+```
+Now we have split the dataset into a train and a test dataset. 
+We have taken a look at the data and confirmed that the questions are categorical as well as segment and county. Age, respondentID is numerical. 
+Age is ranging from 18 to 91. And we have 1628 unique respondents in this dataset. 
+
+
+# Data Exploration and Visualization
+
+Understanding the distribution of our target variable and the features is crucial. Let's visualize the distribution of the Segment column and the distribution of responses for some of the questions.
+
+
+## Distribution of the Segment column
+
+```{r segment,include=TRUE,tidy = TRUE}
+
+
+ggplot(train_data, aes(x = Segment, fill = Segment)) +
+ geom_bar(width=0.7) +
+ geom_text(stat='count', aes(label=..count..), vjust=-0.5) +
+ scale_fill_brewer(palette="Pastel1") +
+ theme_minimal() +
+ labs(title = "Distribution of Segment in Training Data", x = "Segment", y = NULL) +
+ theme(legend.position = "none", axis.title.y=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+
+```
+
+We can see that there are large differences in how many respondents we find in each segment. 
+Ideally they should be more evenly distributed. 
+
+## Distribution of responses to the questions
+
+```{r Q1,include=FALSE,out.width="50%", fig.align='left'}
+# Define the desired order
+desired_order <- c("Completely disagree", "Partially disagree", "Absolutely impossible to answer", "Partially agree", "Completely agree")
+
+library(ggplot2)
+library(RColorBrewer)
+library(dplyr)
+library(tidyr)
+
+# Reshape the data to long format
+long_data <- train_data %>%
+  gather(key = "Question", value = "Response", 5:16)
+
+# Define a function to plot for a specific question
+plot_question <- function(data, question_name) {
+  filtered_data <- data %>% filter(Question == question_name)
+  
+  ggplot(filtered_data, aes(x = Response, fill = Response)) +
+    geom_bar(width=0.7) +
+    geom_text(stat='count', aes(label=..count..), vjust=-0.5, position=position_dodge(width=0.7)) +
+    scale_fill_brewer(palette="Pastel1") +
+    scale_x_discrete(limits = desired_order) +
+    theme_minimal() +
+    labs(title =  question_name, 
+         x = "Response Alternatives", y = NULL) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none", axis.title.y=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+}
+
+# Loop through unique questions in the long data and plot them
+for (question_name in unique(long_data$Question)) {
+  print(plot_question(long_data, question_name))
+}
+
+
+```
+
+I wanted to see how the different segments respondet to the questions. 
+
+```{r questions, include=TRUE,out.width="70%", fig.align='left'}
+
+
+# First, make sure we use the original dataset's column names
+question_cols_original <- colnames(data)[5:16]
+
+# Reshape the data to long format with original column names
+long_data_original <- data %>%
+  gather(key = "Question", value = "Response", 5:16)
+
+# Create a data frame with percentages
+long_data_percent <- long_data_original %>%
+  group_by(Question, Segment, Response) %>%
+  summarise(Count = n()) %>%
+  mutate(Total = sum(Count), Percentage = (Count/Total)*100) %>%
+  ungroup()
+
+# Define the desired order
+desired_order <- c("Completely disagree", "Partially disagree", "Absolutely impossible to answer", "Partially agree", "Completely agree")
+
+# Plotting function with blank legend title
+plot_question_percent <- function(data, question_name) {
+  
+  filtered_data <- data %>% filter(Question == question_name)
+  
+  ggplot(filtered_data, aes(x = Segment, y = Percentage, fill = factor(Response, levels = desired_order))) +
+    geom_bar(stat="identity", width=0.7, position = "fill") +
+    geom_text(aes(label = sprintf("%.0f%%", Percentage)), position = position_fill(vjust = 0.5)) +
+    scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+    scale_fill_brewer(palette="Pastel1", name="") + 
+    scale_x_discrete(limits = unique(data$Segment)) +
+    theme_minimal() +
+    labs(title = question_name, 
+         x = "Segment", y = NULL) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          axis.title.y=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+}
+
+# Loop through unique questions in the long data and plot them
+for (question_name in question_cols_original) {
+  print(plot_question_percent(long_data_percent, question_name))
+}
+
+
+
+```
+Interesting to see how polarized the "Well-intentioned" answered in a lot of the questions. One might think that it was because of a low number in this group but it is the around the average number. 
+
+
+```{r spider, include=TRUE,out.width="70%", fig.align='left'}
+
+# Load necessary libraries
+library(tidyverse)
+library(fmsb)
+library(gridExtra)
+library(grid)
+
+
+# Aggregate data for spider chart
+spider_data <- long_data_percent %>%
+  filter(Response %in% c("Partially agree", "Completely agree")) %>%
+  group_by(Segment, Question) %>%
+  summarise(Total_Percentage = sum(Percentage)) %>%
+  spread(key = Question, value = Total_Percentage)
+
+# Store the full question names for the table
+full_question_names <- data.frame(Question = colnames(spider_data)[-1])
+
+# Truncate question names to the first 6 letters for the spider chart
+colnames(spider_data)[-1] <- substr(colnames(spider_data)[-1], 1, 6)
+
+# Prepare data for spider chart
+max_values <- apply(spider_data[, -1], 2, max)
+min_values <- rep(0, length(max_values))
+
+# Set the segments as row names
+row.names(spider_data) <- spider_data$Segment
+
+# Bind the min and max values, and remove the Segment column
+spider_data_final <- rbind(min_values, spider_data[, -1], max_values)
+
+# Define colors for each segment
+colors <- rainbow(n = nrow(spider_data))
+
+
+
+# Create the spider chart with defined colors
+spider_plot <- radarchart(spider_data_final, pcol=colors, plwd=2, cglcol="grey", cglty=1, axislabcol="grey", caxislabels=seq(0, 100, 20), cglwd=0.8, title="Partially agree, Completely agree", show.legend = FALSE)
+
+
+# Create the table with full question names
+table_plot <- tableGrob(full_question_names, 
+                        theme = ttheme_default(base_size = 8, 
+                                               core = list(fg_params=list(hjust=0, x=0))))
+# Create a custom legend and grab it as a grob
+legend("topright", legend = spider_data$Segment, fill = colors, title = "Segment", bty = "n")
+legend_grob <- grid::grid.grab()
+
+# Arrange the spider chart, custom legend, and table side by side
+grid.arrange(spider_plot, legend_grob, table_plot, ncol=3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+A bit of a tricky chart but I wanted to see how the segments, while only looking at teir positive response, respondent compared to each other. 
+
+
+\newpage
+
+# Modeling Approach
+
+For this analysis, we've chosen Random Forest, kNN, and Naive Bayes. Here's why:
+
+### Random Forest:
+Given the dataset's mix of categorical responses to different questions, the Random Forest model becomes an optimal choice. This ensemble method thrives in scenarios with both numerical and categorical features. Its parallel processing ability accelerates the training process, making it both efficient and accurate in prediction.
+
+### k-Nearest Neighbors (kNN):
+The kNN algorithm was chosen for its expertise in classification tasks. Considering the categorical nature of the dataset, I introduced dummy variables. This step was vital to ensure the kNN could process numerical data and prevent unintended ordinal interpretations of the categorical responses.
+
+### Naive Bayes:
+The dataset consists of multiple categorical responses, leading to a high-dimensional space when considering each unique response. Naive Bayes, with its probabilistic approach, is adept at handling such high-dimensional datasets. It computes the likelihood of each category, making it particularly suited for our dataset's nature.
+
+The dataset was split into a training set (80%) and a testing set (20%). This split ensures that we have a sufficient amount of data for training our models while also retaining an adequate portion for validation.
+
+Now, we'll transition to the Results section, where we'll fit our models on the training data and evaluate their performance on the test data.
+
+# Results
+
+```{r Model, include=TRUE,out.width="100%", fig.align='left'}
+   
+  
+  # Ensure column names are the simplified versions
+  colnames(train_data)[5:16] <- paste("Q", 1:12, sep="")
+  colnames(test_data)[5:16] <- paste("Q", 1:12, sep="")
+  
+  # Construct the formula with the new column names
+  model_formula <- as.formula(paste("Segment ~", paste(paste("Q", 1:12, sep=""), collapse = " + ")))
+  
+  # Random Forest model
+  set.seed(123)
+  rf_model <- randomForest(model_formula, data = train_data, importance = TRUE, ntree = 100)
+  
+  # Predict using the Random Forest model
+  rf_predictions <- predict(rf_model, test_data)
+  
+  # Convert character columns to factors
+  train_data[,5:16] <- lapply(train_data[,5:16], factor)
+  test_data[,5:16] <- lapply(test_data[,5:16], factor)
+  # Create the dummy variables again
+  train_data_dummies <- model.matrix(~ . - 1, data = train_data[,5:16])
+  test_data_dummies <- model.matrix(~ . - 1, data = test_data[,5:16])
+  
+  # Add the Segment column back to the datasets
+  train_data_dummies <- as.data.frame(train_data_dummies)
+  train_data_dummies$Segment <- train_data$Segment
+  
+  test_data_dummies <- as.data.frame(test_data_dummies)
+  test_data_dummies$Segment <- test_data$Segment
+  
+  # k-Nearest Neighbors model with dummy variables
+  set.seed(123)
+  knn_predictions <- kknn(Segment ~ ., train_data_dummies, test_data_dummies, k = 5, distance = 1, kernel = "optimal")
+  
+  
+  # Naive Bayes model
+  set.seed(123)
+  nb_model <- naiveBayes(model_formula, data = train_data)
+  nb_predictions <- predict(nb_model, test_data[, 5:16])
+  
+  # Evaluate model performance
+  rf_accuracy <- sum(diag(confusionMatrix(rf_predictions, test_data$Segment)$table)) / sum(confusionMatrix(rf_predictions, test_data$Segment)$table)
+  knn_accuracy <- sum(diag(confusionMatrix(knn_predictions$fit, test_data$Segment)$table)) / sum(confusionMatrix(knn_predictions$fit, test_data$Segment)$table)
+  nb_accuracy <- sum(diag(confusionMatrix(nb_predictions, test_data$Segment)$table)) / sum(confusionMatrix(nb_predictions, test_data$Segment)$table)
+  
+ 
+  # Create the data frame
+  results_df <- data.frame(
+    Model = c("Random Forest", "k-Nearest Neighbors", "Naive Bayes"),
+    Accuracy = sprintf("%.2f%%", c(rf_accuracy, knn_accuracy, nb_accuracy) * 100)  # Convert to percentage with a % sign
+  )
+  
+  # Display it as a table
+  results_df %>%
+    gt()%>%
+  tab_header(title = "Model Accuracy")
+
+ 
+
+```
+
+
+
+The table above summarizes the accuracy of our three models. As we can observe:
+
+- The Random Forest model achieved an accuracy of 51.08%.
+- The k-Nearest Neighbors model achieved an accuracy of 41.18%.
+- The Naive Bayes model achieved an accuracy of 53.87%.
+
+This provides a comparative understanding of how each model performs on our dataset. The accuracy metric is chosen as it gives a straightforward understanding of how often the model predicts correctly.
+ 
+I think it could be interesting to see if by adding variables that are usually always included in questioners can impact the models, preferably increase the accuracy. In this dataset we have Age, Gender and county we can add.  
+ 
+*(For code please see rmd or script file. Basically the same as previous except including the extra variables)*
+
+```{r model_extended, include=FALSE,out.width="70%", fig.align='left'}
+# Rename the datasets
+train_data_extended <- train_data
+test_data_extended <- test_data
+
+# Include the background variables in the column names simplification
+colnames(train_data_extended)[c(5:16)] <- c(paste("Q", 1:12, sep=""))
+colnames(test_data_extended)[c(5:16)] <- c(paste("Q", 1:12, sep=""))
+
+# Update the model formula to include the background variables
+model_formula <- as.formula(paste("Segment ~", paste(c(paste("Q", 1:12, sep=""), "Age", "Gender", "County"), collapse = " + ")))
+
+# Random Forest model
+set.seed(123)
+rf_model_extended <- randomForest(model_formula, data = train_data_extended, importance = TRUE, ntree = 100)
+rf_predictions_extended <- predict(rf_model_extended, test_data_extended)
+
+# Convert character columns to factors
+train_data_extended[,2:16] <- lapply(train_data_extended[,2:16], factor)
+test_data_extended[,2:16] <- lapply(test_data_extended[,2:16], factor)
+
+# Create the dummy variables including the background variables
+train_data_dummies_extended <- model.matrix(~ . - 1, data = train_data_extended[,2:16])
+test_data_dummies_extended <- model.matrix(~ . - 1, data = test_data_extended[,2:16])
+
+# Add the Segment column back to the datasets
+train_data_dummies_extended <- as.data.frame(train_data_dummies_extended)
+train_data_dummies_extended$Segment <- train_data_extended$Segment
+
+test_data_dummies_extended <- as.data.frame(test_data_dummies_extended)
+test_data_dummies_extended$Segment <- test_data_extended$Segment
+
+# Ensure both datasets have the same dummy columns
+missing_cols <- setdiff(names(train_data_dummies_extended), names(test_data_dummies_extended))
+for (col in missing_cols) {
+  test_data_dummies_extended[[col]] <- 0
+}
+
+# Similarly, ensure train_data_dummies has columns that might only appear in test_data_dummies
+missing_cols <- setdiff(names(test_data_dummies_extended), names(train_data_dummies_extended))
+for (col in missing_cols) {
+  train_data_dummies_extended[[col]] <- 0
+}
+
+# Order the columns to ensure they're in the same order
+train_data_dummies_extended <- train_data_dummies_extended[, names(test_data_dummies_extended)]
+
+# k-Nearest Neighbors model with dummy variables
+set.seed(123)
+knn_predictions_extended <- kknn(Segment ~ ., train_data_dummies_extended, test_data_dummies_extended, k = 5, distance = 1, kernel = "optimal")
+
+# Naive Bayes model
+set.seed(123)
+nb_model_extended <- naiveBayes(model_formula, data = train_data_extended)
+nb_predictions_extended <- predict(nb_model_extended, test_data_extended[, 2:16])  # Ensure this encompasses the correct columns
+
+# Evaluate model performance
+rf_accuracy_extended <- sum(diag(confusionMatrix(rf_predictions_extended, test_data_extended$Segment)$table)) / sum(confusionMatrix(rf_predictions_extended, test_data_extended$Segment)$table)
+knn_accuracy_extended <- sum(diag(confusionMatrix(knn_predictions_extended$fit, test_data_extended$Segment)$table)) / sum(confusionMatrix(knn_predictions_extended$fit, test_data_extended$Segment)$table)
+nb_accuracy_extended <- sum(diag(confusionMatrix(nb_predictions_extended, test_data_extended$Segment)$table)) / sum(confusionMatrix(nb_predictions_extended, test_data_extended$Segment)$table)
+
+# Display the results in a table
+results_df_extended <- data.frame(
+  Model = c("Random Forest (Extended)", "k-Nearest Neighbors (Extended)", "Naive Bayes (Extended)"),
+  Accuracy = sprintf("%.2f%%", c(rf_accuracy_extended, knn_accuracy_extended, nb_accuracy_extended) * 100)  # Convert to percentage with a % sign
+)
+
+results_df_extended %>%
+  gt() %>%
+  tab_header(title = "Model Accuracy with Extended Variables")
+
+
+```
+
+Combining the two results: 
+
+```{r model_results, include=TRUE,out.width="100%", fig.align='left'}
+# Create the data frames
+results_df <- data.frame(
+  Model = c("Random Forest", "k-Nearest Neighbors", "Naive Bayes"),
+  Accuracy_Standard = sprintf("%.2f%%", c(rf_accuracy, knn_accuracy, nb_accuracy) * 100)  # Convert to percentage with a % sign
+)
+
+results_df_extended <- data.frame(
+  Model = c("Random Forest", "k-Nearest Neighbors", "Naive Bayes"),
+  Accuracy_Extended = sprintf("%.2f%%", c(rf_accuracy_extended, knn_accuracy_extended, nb_accuracy_extended) * 100)  # Convert to percentage with a % sign
+)
+# Merge the data frames
+combined_df <- merge(results_df, results_df_extended, by = "Model", all = TRUE, sort = FALSE)
+
+# Reorder the Model column to maintain desired order
+desired_order <- c("Random Forest", "k-Nearest Neighbors", "Naive Bayes",
+                   "Random Forest (Extended)", "k-Nearest Neighbors (Extended)", "Naive Bayes (Extended)")
+combined_df$Model <- factor(combined_df$Model, levels = desired_order)
+
+# Display the combined results in a table
+combined_df %>%
+  gt() %>%
+  tab_header(title = "Model Accuracy Comparison")
+
+```
+
+
+
+# Conclusion
+
+Throughout this analysis, we've employed various models to predict the segment of individuals based on their responses to a set of opinion-based questions. 
+
+
+The integration of background variables, specifically Age, Gender, and County, has had a mixed impact on our model accuracies:
+
+### Random Forest: 
+This model experienced a notable improvement with an increase of approximately 10 percentage points in accuracy. The addition of the demographic variables possibly provided the Random Forest algorithm with more information to make refined splits in the decision trees, enhancing its predictive capabilities.
+
+### k-Nearest Neighbors (kNN): 
+The accuracy for kNN decreased by nearly 9 percentage points upon the inclusion of the extra variables. This suggests that the addition of these variables introduced more complexity and noise into the distance calculations that kNN relies on. It's a reminder that kNN can be sensitive to the scale and nature of the data, and not all additional features will necessarily enhance its performance.
+
+### Naive Bayes: 
+The performance of the Naive Bayes model showed a slight dip (around 2.5 percentage points) with the addition of the background variables. This indicates that while these variables might be informative, their inclusion in the model might have somewhat complicated the conditional probability estimations.
+
+
+In summary, while one model benefited from the richer dataset, others struggled with the added complexity. This underscores the importance of thoughtful feature selection and the need to continually validate and test models, especially as more variables are incorporated. It's evident that not all additional features guarantee better performance across all algorithms. It's crucial to understand the nuances and sensitivities of each modeling approach to make informed decisions about feature integration.
+Our aim of exceeding 70% accuracy was not met. So the company needs to consider the cost of including 30 background questions into questionnaires that gives an accuarcy of 70% vs including 11 questions and three basic background questions and then obtaining an accuracy of 61.30%. 70% vs 61.30% is not that far apart in mind. 
+
+
+
+## Potential Impact: 
+Achieving sub optimal accuracy can lead to misguided analyses of the segments. For a public broadcaster like this company, such inaccuracies could have adverse consequences. Misinterpreting which programs various segments prefer may result in the broadcaster presenting unsuitable content to the wrong audience. This mismatch could diminish viewer satisfaction and engagement.
+
+## Limitations:
+Our models rely heavily on the quality and number of respondents in the data set. If the dataset isn't representative of the broader population, our predictions might not generalize well outside this sample.
+The number of respondents might be to few to make this predictions, but again it comes down to cost of having more respondents vs the accuracy level we get from this dataset. 
+Including more background variables, like political party, education, status etc might impact the models. 
+
+# Future Work:
+1) Model Optimization: run several models with tuning to see if we achive better accuracy.
+2) Incorporating Additional Data: Including demographic or contextual details can provide richer insights and improve model accuracy.
+3) Complex Models: Exploring deep learning techniques or an ensemble of different models might yield better performance.
+
+
+
+\newpage
+
+
+## References
+
+### Primary Literature and Textbooks
+
+- Irizarry, R. A. (n.d.). Introduction to Data Science. Retrieved from [http://rafalab.dfci.harvard.edu/dsbook/](http://rafalab.dfci.harvard.edu/dsbook/)
+- James, G., Witten, D., Hastie, T., & Tibshirani, R. (2013). An Introduction to Statistical Learning. Springer.
+- Breiman, L. (2001). Random forests. Machine learning, 45(1), 5-32.
+
+### Software and Libraries
+
+- R Core Team (2021). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL [https://www.R-project.org/](https://www.R-project.org/).
+- Liaw, A., & Wiener, M. (2002). Classification and regression by randomForest. R news, 2(3), 18-22. [For the randomForest package in R]
+- Karatzoglou, A., Smola, A., Hornik, K., & Zeileis, A. (2004). kernlab – An S4 Package for Kernel Methods in R. Journal of Statistical Software, 11(9), 1-20. [For the kknn function]
